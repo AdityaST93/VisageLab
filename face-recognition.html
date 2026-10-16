@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face Recognition – Live Test</title>
+<style>
+  :root{--bg:#0b1117;--card:#131c26;--txt:#e6f1f7;--mut:#7e93a3;--cy:#00e5ff;--red:#ff4d5e}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--txt);padding:12px}
+  h1{font-size:18px;margin:4px 0 10px;color:var(--cy)}
+  .card{background:var(--card);border-radius:12px;padding:12px;margin-bottom:12px}
+  #stage{position:relative;width:100%;max-width:640px;margin:auto;background:#000;border-radius:10px;overflow:hidden;min-height:200px}
+  #stage video,#stage canvas{display:block;width:100%;height:auto}
+  #ov{position:absolute;left:0;top:0;width:100%;height:100%}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+  button,input[type=text]{font-size:14px;padding:10px 12px;border-radius:8px;border:1px solid #28394a;background:#1a2634;color:var(--txt)}
+  button{cursor:pointer;background:var(--cy);color:#00222a;border:0;font-weight:600}
+  button.sec{background:#1f2e3f;color:var(--txt);border:1px solid #2c4054}
+  input[type=text]{flex:1;min-width:120px}
+  #status{font-size:13px;color:var(--mut);margin-top:6px}
+  .p{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #1f2e3f;font-size:14px}
+  .p small{color:var(--mut)}
+  .p button{padding:5px 10px;background:var(--red);color:#fff}
+  label{font-size:13px;color:var(--mut)}
+  .g{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px}
+  .g span{color:var(--mut)}
+  .fh{margin:10px 0 4px;color:var(--cy);font-weight:600;font-size:13px}
+  .sw{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;border:1px solid #fff4}
+</style>
+</head>
+<body>
+<h1>● Face Recognition – Live Test</h1>
+
+<div class="card">
+  <div id="stage">
+    <video id="v" playsinline muted></video>
+    <canvas id="ov"></canvas>
+  </div>
+  <div class="row">
+    <button id="camBtn">Start Camera</button>
+    <button class="sec" id="stopBtn">Stop</button>
+    <button class="sec" id="testPhoto">Test with Photo</button>
+    <input type="file" id="testFile" accept="image/*" hidden>
+  </div>
+  <div class="row">
+    <label>Strictness (lower = stricter): <b id="thv">0.50</b></label>
+    <input type="range" id="th" min="0.3" max="0.7" step="0.01" value="0.5" style="flex:1">
+  </div>
+  <div id="status">Loading models…</div>
+</div>
+
+<div class="card">
+  <b>Face &amp; Eye Details</b>
+  <div id="det" style="margin-top:6px;font-size:13px;color:var(--mut)">Camera start karo ya photo test karo: details yahan aur video ke upar dikhengi. Register karna zaroori nahi.</div>
+  <small style="color:var(--mut);display:block;margin-top:8px">Note: asli retina scan (nas ka pattern) webcam se possible nahi hai, uske liye special infrared hardware chahiye. Yahan eye-region ki analysis hai: iris colour, blink, gaze, eye size.</small>
+</div>
+
+<details class="card">
+  <summary><b>Register a person (optional)</b></summary>
+  <div class="row">
+    <input type="text" id="name" placeholder="Name (e.g. John)">
+  </div>
+  <div class="row">
+    <button id="regCam">Capture from Camera</button>
+    <button class="sec" id="regPhoto">Upload Photo</button>
+    <input type="file" id="regFile" accept="image/*" hidden>
+  </div>
+  <div id="list" style="margin-top:8px"></div>
+  <small style="color:var(--mut)">Tip: register the same person 3–5 times (different angles/light) for better accuracy.</small>
+</details>
+
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.js"></script>
+<script>
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model/';
+const $ = id => document.getElementById(id);
+const v = $('v'), ov = $('ov'), ctx = ov.getContext('2d');
+const opts = () => new faceapi.TinyFaceDetectorOptions({inputSize: 320, scoreThreshold: 0.5});
+let db = {}, running = false, stream = null, ready = false;
+
+try { db = JSON.parse(localStorage.getItem('faces') || '{}'); } catch(e) { db = {}; }
+const save = () => { try { localStorage.setItem('faces', JSON.stringify(db)); } catch(e) {} renderList(); };
+const status = t => $('status').textContent = t;
+
+function renderList(){
+  const names = Object.keys(db);
+  $('list').innerHTML = names.length ? names.map(n =>
+    `<div class="p"><span>${n.replace(/</g,'&lt;')} <small>(${db[n].length} sample${db[n].length>1?'s':''})</small></span><button onclick="del('${n.replace(/'/g,"\\'")}')">Delete</button></div>`
+  ).join('') : '<div class="p"><small>No one registered yet</small></div>';
+}
+window.del = n => { delete db[n]; save(); };
+renderList();
+
+$('th').oninput = e => $('thv').textContent = (+e.target.value).toFixed(2);
+
+const have = {};
+(async () => {
+  const nets = {det: 'tinyFaceDetector', lm: 'faceLandmark68Net', rec: 'faceRecognitionNet', age: 'ageGenderNet', expr: 'faceExpressionNet'};
+  const failed = [];
+  for (const k in nets) {
+    try { await faceapi.nets[nets[k]].loadFromUri(MODEL_URL); have[k] = true; }
+    catch(e) { failed.push(nets[k]); }
+  }
+  if (!have.det || !have.lm || !have.rec) { status('Core models load nahi hue (' + failed.join(', ') + '). Internet check karo / page ko HTTPS se kholo.'); return; }
+  ready = true;
+  status(failed.length ? 'Ready (kuch extra models missing: ' + failed.join(', ') + ')' : 'Models ready. Camera start karo ya photo test karo.');
+})();;
+
+function match(desc){
+  const th = +$('th').value; let best = {name: null, d: 9};
+  for (const n in db) for (const s of db[n]) {
+    const d = faceapi.euclideanDistance(desc, new Float32Array(s));
+    if (d < best.d) best = {name: n, d};
+  }
+  return best.d < th ? best : {name: null, d: best.d};
+}
+
+// Jarvis-style dots + lines between nearby landmarks
+function jarvis(pts, color){
+  ctx.fillStyle = color; ctx.strokeStyle = color + '55'; ctx.lineWidth = 1;
+  for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+    const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
+    if (dx*dx + dy*dy < 900) { ctx.beginPath(); ctx.moveTo(pts[i].x, pts[i].y); ctx.lineTo(pts[j].x, pts[j].y); ctx.stroke(); }
+  }
+  pts.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, 2.2, 0, 7); ctx.fill(); });
+}
+
+const detect = async src => {
+  let t = faceapi.detectAllFaces(src, opts()).withFaceLandmarks();
+  if (have.expr) t = t.withFaceExpressions();
+  if (have.age) t = t.withAgeAndGender();
+  return await t.withFaceDescriptors();
+};
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const mid = pts => ({x: pts.reduce((a, p) => a + p.x, 0) / pts.length, y: pts.reduce((a, p) => a + p.y, 0) / pts.length});
+const off = document.createElement('canvas'), octx = off.getContext('2d', {willReadFrequently: true});
+
+function colorName(r, g, b){
+  const [h, s, l] = rgb2hsl(r, g, b);
+  if (l < 0.18) return 'Dark Brown / Black';
+  if (s < 0.18) return l > 0.5 ? 'Gray' : 'Dark Brown';
+  if (h > 190 && h < 260) return 'Blue';
+  if (h >= 75 && h <= 190) return 'Green';
+  if (h >= 35 && h < 75) return l > 0.35 ? 'Hazel / Amber' : 'Brown';
+  return 'Brown';
+}
+function rgb2hsl(r, g, b){
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2; let h = 0, s = 0;
+  if (mx !== mn) {
+    const d = mx - mn; s = l > .5 ? d / (2 - mx - mn) : d / (mx + mn);
+    h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60;
+  }
+  return [h, s, l];
+}
+
+// eye analysis: EAR (openness), iris centre (darkest pixels), iris colour, gaze
+function eyeInfo(pts, side){
+  const w = dist(pts[0], pts[3]), h = (dist(pts[1], pts[5]) + dist(pts[2], pts[4])) / 2;
+  const ear = h / w;
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const x0 = Math.max(0, Math.floor(Math.min(...xs))), y0 = Math.max(0, Math.floor(Math.min(...ys)));
+  const bw = Math.max(4, Math.ceil(Math.max(...xs)) - x0), bh = Math.max(4, Math.ceil(Math.max(...ys)) - y0);
+  let iris = null, gaze = '-', col = null;
+  if (ear > 0.16) {
+    try {
+      const img = octx.getImageData(x0, y0, bw, bh).data, px = [];
+      for (let i = 0; i < img.length; i += 4) px.push({l: img[i] * .3 + img[i+1] * .59 + img[i+2] * .11, i, x: (i / 4) % bw, y: Math.floor(i / 4 / bw)});
+      px.sort((a, b) => a.l - b.l);
+      const dk = px.slice(0, Math.max(6, Math.floor(px.length * 0.18)));
+      const cx = dk.reduce((a, p) => a + p.x, 0) / dk.length, cy = dk.reduce((a, p) => a + p.y, 0) / dk.length;
+      iris = {x: x0 + cx, y: y0 + cy};
+      const rx = cx / bw; gaze = rx < 0.4 ? 'Left' : rx > 0.6 ? 'Right' : 'Center';
+      // iris colour: brighter-than-pupil ring near iris centre
+      const ring = px.slice(Math.floor(px.length * .05), Math.floor(px.length * .3));
+      let r = 0, g = 0, b = 0; ring.forEach(p => { r += img[p.i]; g += img[p.i+1]; b += img[p.i+2]; });
+      r = Math.round(r / ring.length); g = Math.round(g / ring.length); b = Math.round(b / ring.length);
+      col = {rgb: `rgb(${r},${g},${b})`, name: colorName(r, g, b)};
+    } catch(e) {}
+  }
+  return {w, h, ear, open: ear > 0.2, iris, gaze, col, c: mid(pts)};
+}
+
+function analyze(d){
+  const P = d.landmarks.positions, jaw = P.slice(0, 17);
+  const L = eyeInfo(P.slice(36, 42)), R = eyeInfo(P.slice(42, 48));
+  const faceW = dist(jaw[0], jaw[16]), faceH = dist({x: (P[19].x + P[24].x) / 2, y: (P[19].y + P[24].y) / 2}, P[8]) * 1.35;
+  const ratio = faceH / faceW;
+  const shape = ratio > 1.45 ? 'Long' : ratio > 1.3 ? 'Oval' : ratio > 1.15 ? 'Round / Square' : 'Wide';
+  const tilt = Math.atan2(R.c.y - L.c.y, R.c.x - L.c.x) * 180 / Math.PI;
+  const exp = d.expressions ? Object.entries(d.expressions).sort((a, b) => b[1] - a[1])[0] : ['n/a', 0];
+  return {
+    age: d.age ?? NaN, gender: d.gender || 'n/a', gp: d.genderProbability || 0, exp, L, R,
+    ipd: dist(L.c, R.c), faceW, faceH, ratio, shape, tilt,
+    mouthW: dist(P[48], P[54]), mouthOpen: dist(P[62], P[66]), noseL: dist(P[27], P[33]), score: d.detection.score
+  };
+}
+
+function eyeCard(n, e){
+  const sw = e.col ? `<i class="sw" style="background:${e.col.rgb}"></i> ${e.col.name}` : '-';
+  return `<span>${n} eye</span><div>${e.open ? 'Open' : 'Closed/Blink'} · EAR ${e.ear.toFixed(2)} · ${e.w.toFixed(0)}px wide<br>Iris: ${sw} · Gaze: ${e.gaze}</div>`;
+}
+let lastUI = 0;
+function showDetails(items){
+  if (performance.now() - lastUI < 400) return; lastUI = performance.now();
+  if (!items.length) { $('det').textContent = 'Koi face detect nahi hua.'; return; }
+  $('det').innerHTML = items.slice(0, 2).map(({name, a}) => `
+    <div class="fh">${name || 'Unknown'}</div>
+    <div class="g">
+      <span>Age (est.)</span><div>${isNaN(a.age) ? 'n/a' : '~' + a.age.toFixed(0) + ' years'}</div>
+      <span>Gender (est.)</span><div>${a.gender} (${(a.gp * 100).toFixed(0)}%)</div>
+      <span>Expression</span><div>${a.exp[0]} (${(a.exp[1] * 100).toFixed(0)}%)</div>
+      <span>Face shape</span><div>${a.shape} · W/H ${(1 / a.ratio).toFixed(2)}</div>
+      <span>Face size</span><div>${a.faceW.toFixed(0)} × ${a.faceH.toFixed(0)} px</div>
+      <span>Eye distance</span><div>${a.ipd.toFixed(0)} px</div>
+      <span>Nose length</span><div>${a.noseL.toFixed(0)} px</div>
+      <span>Mouth</span><div>${a.mouthW.toFixed(0)}px wide · ${a.mouthOpen > 6 ? 'Open' : 'Closed'}</div>
+      <span>Head tilt</span><div>${a.tilt.toFixed(1)}°</div>
+      <span>Detect score</span><div>${(a.score * 100).toFixed(0)}%</div>
+      ${eyeCard('Left', a.L)}${eyeCard('Right', a.R)}
+    </div>`).join('');
+}
+
+function drawEye(e, col){
+  ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.ellipse(e.c.x, e.c.y, e.w / 2 + 3, Math.max(e.h, 3) / 2 + 3, 0, 0, 7); ctx.stroke();
+  if (e.iris) {
+    ctx.beginPath(); ctx.arc(e.iris.x, e.iris.y, Math.max(3, e.w * 0.17), 0, 7); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(e.iris.x, e.iris.y, 1.5, 0, 7); ctx.fill();
+  }
+}
+
+function hud(b, a, col){
+  const fs = Math.max(11, Math.round(ov.width / 48)), lh = fs + 5;
+  const eye = (n, e) => `${n}: ${e.open ? 'Open' : 'Closed'} | Iris ${e.col ? e.col.name : '-'} | Gaze ${e.gaze}`;
+  const lines = [
+    `Age ${isNaN(a.age) ? 'n/a' : '~' + a.age.toFixed(0)}  |  ${a.gender} ${(a.gp * 100).toFixed(0)}%`,
+    `Mood: ${a.exp[0]} ${(a.exp[1] * 100).toFixed(0)}%`,
+    `Face: ${a.shape} (${a.faceW.toFixed(0)}x${a.faceH.toFixed(0)}px)`,
+    `Eye dist ${a.ipd.toFixed(0)}px  |  Tilt ${a.tilt.toFixed(1)}deg`,
+    eye('L eye', a.L), eye('R eye', a.R)
+  ];
+  ctx.font = fs + 'px system-ui';
+  const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 12, h = lines.length * lh + 6;
+  let x = b.x + b.width + 6;
+  if (x + w > ov.width) x = b.x - w - 6;
+  if (x < 0) x = Math.max(2, b.x + 4);
+  const y = Math.min(Math.max(2, b.y), ov.height - h - 2);
+  ctx.fillStyle = 'rgba(5,15,22,.78)'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#d8f6ff';
+  lines.forEach((l, i) => ctx.fillText(l, x + 6, y + 3 + (i + 1) * lh - 5));
+}
+
+function draw(dets, src){
+  off.width = ov.width; off.height = ov.height; octx.drawImage(src, 0, 0, ov.width, ov.height);
+  const items = [];
+  dets.forEach(d => {
+    const m = match(d.descriptor), known = !!m.name, noDb = !Object.keys(db).length, col = (known || noDb) ? '#00e5ff' : '#ff4d5e';
+    const b = d.detection.box, a = analyze(d);
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.strokeRect(b.x, b.y, b.width, b.height);
+    if (known || noDb) jarvis(d.landmarks.positions, col);
+    drawEye(a.L, '#7CFF6B'); drawEye(a.R, '#7CFF6B');
+    const label = (known ? `${m.name} (${m.d.toFixed(2)})` : noDb ? 'Face' : 'Unknown');
+    ctx.font = 'bold 15px system-ui'; const w = ctx.measureText(label).width + 10;
+    ctx.fillStyle = col; ctx.fillRect(b.x, b.y - 22, w, 22);
+    ctx.fillStyle = '#00141a'; ctx.fillText(label, b.x + 5, b.y - 6);
+    hud(b, a, col);
+    items.push({name: known ? m.name : null, a});
+  });
+  showDetails(items);
+}
+
+async function loop(){
+  if (!running) return;
+  if (v.readyState >= 2) {
+    if (ov.width !== v.videoWidth) { ov.width = v.videoWidth; ov.height = v.videoHeight; }
+    const dets = await detect(v);
+    ctx.clearRect(0, 0, ov.width, ov.height);
+    draw(faceapi.resizeResults(dets, {width: ov.width, height: ov.height}), v);
+    status(dets.length ? `${dets.length} face(s) detected` : 'No face detected');
+  }
+  requestAnimationFrame(loop);
+}
+
+$('camBtn').onclick = async () => {
+  if (!ready) return status('Models still loading…');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'user', width: 640}});
+    v.srcObject = stream; v.style.display = 'block'; await v.play();
+    running = true; loop();
+  } catch(e) { status('Camera error: ' + e.message + ' (HTTPS needed & allow permission)'); }
+};
+$('stopBtn').onclick = () => {
+  running = false; if (stream) stream.getTracks().forEach(t => t.stop());
+  ctx.clearRect(0, 0, ov.width, ov.height); status('Stopped.');
+};
+
+function loadImg(file){ return new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = URL.createObjectURL(file); }); }
+
+async function addDescriptor(src, name){
+  const d = await faceapi.detectSingleFace(src, opts()).withFaceLandmarks().withFaceDescriptor();
+  if (!d) return status('No face found – try a clearer front-facing photo.');
+  (db[name] = db[name] || []).push(Array.from(d.descriptor)); save();
+  status(`Registered "${name}" (${db[name].length} samples).`);
+}
+const needName = () => { const n = $('name').value.trim(); if (!n) status('Enter a name first.'); return n; };
+
+$('regCam').onclick = async () => {
+  const n = needName(); if (!n) return;
+  if (!running) return status('Start the camera first.');
+  await addDescriptor(v, n);
+};
+$('regPhoto').onclick = () => { if (needName() && ready) $('regFile').click(); };
+$('regFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  await addDescriptor(await loadImg(f), $('name').value.trim()); e.target.value = '';
+};
+
+$('testPhoto').onclick = () => ready ? $('testFile').click() : status('Models still loading…');
+$('testFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('stopBtn').click();
+  const img = await loadImg(f);
+  v.style.display = 'none'; ov.style.position = 'static'; ov.style.height = 'auto';
+  ov.width = img.naturalWidth; ov.height = img.naturalHeight;
+  ctx.drawImage(img, 0, 0);
+  const dets = await detect(img);
+  lastUI = 0; draw(dets, img); status(`${dets.length} face(s) found in photo.`);
+  e.target.value = '';
+};
+</script>
+</body>
+</html>
