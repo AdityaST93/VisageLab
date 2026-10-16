@@ -1,206 +1,135 @@
-# VisageLab — Face Recognition Toolkit
+# VisageLab
 
-A consent-based face detection and recognition toolkit built with **Python, OpenCV, and Streamlit**. VisageLab supports face enrollment, webcam recognition, image and video processing, model evaluation, and recognition performance testing.
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+![python](https://img.shields.io/badge/python-3.9%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-## 🚀 Features
+A small, **consent-based** face recognition toolkit built on OpenCV only
+(Haar detection + LBPH recognition). No dlib, no cmake, no model downloads.
 
-- **Face Detection:** Detect faces using OpenCV Haar Cascade.
-- **Face Recognition:** Identify enrolled people using the LBPH algorithm.
-- **Webcam Recognition:** Detect and recognize faces in real time.
-- **Face Enrollment:** Register people using images or webcam captures with consent.
-- **Image & Video Processing:** Run face recognition on photos and video files.
-- **Quality Checks:** Filter blurry, dark, low-contrast, and duplicate enrollment images.
-- **Accuracy Evaluation:** Measure recognition accuracy, False Acceptance Rate (FAR), and False Rejection Rate (FRR).
-- **Performance Benchmarking:** Measure processing time and estimate FPS.
-- **Web Interface:** Use the Streamlit application or browser-based demo.
-- **Privacy-Focused Design:** Process data locally on your machine.
+It is built as a **series**: every part is a git tag you can check out and run
+([docs/SERIES.md](docs/SERIES.md)). The project started from studying an existing open-source
+template and redesigning it ([docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)).
 
-## 🛠️ Technology Stack
-
-- **Language:** Python
-- **Computer Vision:** OpenCV
-- **Face Detection:** Haar Cascade
-- **Face Recognition:** Local Binary Patterns Histograms (LBPH)
-- **Web Interface:** Streamlit, HTML, CSS, JavaScript
-- **Data Processing:** NumPy, Pandas
-- **Testing:** Pytest
-
-## 📁 Project Structure
-
-```text
-VisageLab/
-├── app.py
-├── requirements.txt
-├── pyproject.toml
-├── README.md
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── visagelab/
-│   ├── cli.py
-│   ├── detection.py
-│   ├── recognizer.py
-│   ├── enrollment.py
-│   ├── preprocess.py
-│   ├── evaluate.py
-│   ├── quality.py
-│   ├── tracker.py
-│   └── pipeline.py
-├── web/
-│   ├── index.html
-│   └── src/
-├── docs/
-├── scripts/
-├── tests/
-└── data/
-```
-
-## ⚙️ Installation
-
-### Prerequisites
-
-- Python 3.9 or newer
-- pip
-- A webcam for live recognition (optional)
-
-### Step 1: Clone the Repository
+## Install
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/VisageLab.git
-cd VisageLab
+pip install -r requirements.txt      # opencv-contrib-python, numpy, streamlit, pandas
+# or, as a command:  pip install -e .   -> gives you the `visagelab` command
+python -m visagelab doctor           # checks the install and tells you how to fix problems
 ```
 
-Replace `YOUR-USERNAME` with your GitHub username.
+`opencv-contrib-python` is required (the `cv2.face` module lives in contrib). If you see
+`module 'cv2' has no attribute 'face'`, run `doctor`: it checks Python, OpenCV, `cv2.face`, the Haar
+files, your data folder and (with `--camera`) the webcam, and prints the fix for anything wrong.
+The usual cause is having `opencv-python` and `opencv-contrib-python` installed together: keep
+only the contrib one.
 
-### Step 2: Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### Step 3: Check the Installation
+## Quick start
 
 ```bash
-python -m visagelab doctor
-```
+# 1. Enroll (consent is mandatory and recorded)
+python -m visagelab enroll Alice a1.jpg a2.jpg a3.jpg --consent --note "verbal, 15 Oct"
+python -m visagelab enroll Bob --camera --shots 5 --consent       # webcam, SPACE = capture
 
-## 💻 Usage
+# 2. Identify
+python -m visagelab identify                                      # webcam, q to quit
+python -m visagelab identify --source photo.jpg --output out.jpg
+python -m visagelab identify --source clip.mp4 --output out.mp4 --log seen.csv
 
-### 1. Enroll a Person
-
-Register a person using existing images:
-
-```bash
-python -m visagelab enroll Alice a1.jpg a2.jpg --consent
-```
-
-Register using a webcam:
-
-```bash
-python -m visagelab enroll Bob --camera --shots 5 --consent
-```
-
-### 2. Recognize Faces
-
-Start real-time webcam recognition:
-
-```bash
-python -m visagelab identify
-```
-
-Recognize faces in an image:
-
-```bash
-python -m visagelab identify --source photo.jpg --output result.jpg
-```
-
-Process a video:
-
-```bash
-python -m visagelab identify --source clip.mp4 --output result.mp4
-```
-
-### 3. Manage Enrolled People
-
-View the enrolled gallery:
-
-```bash
+# 3. Manage
 python -m visagelab list
+python -m visagelab remove Bob --yes
 ```
 
-Remove a person from the gallery:
+| Command | What it does |
+|---|---|
+| `enroll NAME [photos] --consent` | register a person (photos and/or webcam), with quality checks |
+| `identify` | recognise faces in a webcam, image or video |
+| `list` / `remove NAME` | see or delete enrolled people |
+| `train` | force a model rebuild (normally automatic) |
+| `selftest` | estimate accuracy from your gallery alone (leave-one-out) |
+| `evaluate FOLDER` | measure accuracy on labelled test photos |
+| `bench IMAGE` | time each pipeline stage, estimate FPS |
+| `doctor` | diagnose the installation |
 
-```bash
-python -m visagelab remove Alice --yes
+## Two web front-ends
+
+* **Streamlit lab** — `streamlit run app.py`. Tabs: Enroll (upload / webcam) · Identify ·
+  Evaluate (accuracy + threshold chart) · Gallery.
+* **Browser app, no install** — open `web/index.html`: live webcam recognition, enrollment and an
+  accuracy tester entirely in the browser (nothing uploaded). It uses its own lighter
+  detector/matcher: a demo companion, not a port of the Python tool ([web/README.md](web/README.md)).
+
+## Enrollment quality gate
+
+Bad enrollment photos hurt recognition for as long as they stay in the gallery, so photos are
+checked first and rejected with a reason:
+
+```
+[reject] a2.jpg: blurry (sharpness 0.0030 < 0.008)
+[reject] a3.jpg: too dark (31 < 45); low contrast (14 < 20)
+[dup]    1 photo(s) skipped: identical to one already used
 ```
 
-### 4. Launch the Streamlit Application
+Checks: face size, blur (Laplacian variance divided by contrast squared, so dim photos are not
+mistaken for blurry ones), brightness, contrast, and duplicates (also against photos already
+enrolled). Override with `--no-quality-check`. The limits live in `Settings` and were calibrated
+on one public-domain portrait with synthetic degradations, so tune them on your own camera.
 
-```bash
-streamlit run app.py
+## Measure it before you trust it
+
+**No test photos yet?** `python -m visagelab selftest` hides one photo at a time (genuine trials)
+and one whole person at a time (impostor trials), so a gallery of 2+ people gives accuracy, FRR
+and FAR immediately. It is optimistic (enrolled photos come from one sitting). With a single person
+there are no impostors, and the tool says it cannot recommend a threshold.
+
+**Realistic numbers:** put labelled photos in folders (`unknown` holds people who are **not** enrolled):
+
 ```
-
-### 5. Open the Browser Demo
-
-Open `web/index.html` in a supported web browser and allow webcam access when prompted.
-
-## 📊 Evaluation and Testing
-
-Run the built-in self-test:
-
-```bash
-python -m visagelab selftest
+testset/Alice/*.jpg    testset/Bob/*.jpg    testset/unknown/*.jpg
 ```
-
-Evaluate recognition performance on a labelled dataset:
-
 ```bash
 python -m visagelab evaluate testset --csv report.csv --json report.json
 ```
+You get accuracy, FRR (genuine people rejected or mis-named) and FAR (strangers accepted) for each
+threshold, a per-person table (recall / precision), a confusion matrix and a recommended threshold.
+Defaults (`threshold 55`, `margin 6`) came from a tiny test; **re-tune on your own data.**
 
-Run the test suite:
+## How it works
 
-```bash
-python -m pytest -q
+```
+frame -> Haar face detect (confidence-ranked) -> eye-based align + CLAHE + ellipse mask
+      -> LBPH distance to every enrolled person
+      -> accept only if  best < threshold  AND  best beats runner-up by `margin`
+      -> (video) IoU tracker + majority vote over 7 frames -> overlay
 ```
 
-## 🔍 How It Works
+* **threshold** — LBPH distance; lower = closer. Lower threshold = stricter.
+* **margin** — guards against look-alikes; ignored when only one person is enrolled.
+* The model rebuilds itself automatically whenever the gallery changes.
 
-1. Capture an image or video frame.
-2. Detect faces using Haar Cascade.
-3. Preprocess and align the detected face.
-4. Compare the face against the enrolled gallery using LBPH.
-5. Apply recognition thresholds to determine whether a match is acceptable.
-6. Display the recognition result and optionally track detections across video frames.
+More detail and a module diagram: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## 🔐 Privacy and Responsible Use
+## Privacy and responsible use
 
-- Obtain informed consent before enrolling anyone.
-- Keep face images and recognition data private.
-- Do not commit personal face images or biometric data to GitHub.
-- Inform people when recognition or logging is being used.
-- Do not use this prototype as the sole basis for access control, surveillance, or decisions affecting individuals.
-- Test the system under different lighting conditions and camera angles before relying on its results.
+* Enrolling needs `--consent`; the time and your note are saved in `data/people.json`.
+* Everything stays on your machine in `data/` (it is git-ignored; never commit it).
+* `identify --log` records who was seen and when. Tell people if you use it.
+* Not suitable for security, access control, or any decision that affects people.
 
-## ⚠️ Limitations
+## Development
 
-VisageLab uses Haar Cascade and LBPH, which are lightweight traditional computer vision methods. Recognition performance can vary with lighting, facial pose, image quality, and changes in appearance.
+```bash
+pip install -r requirements-dev.txt && pip install -e . --no-deps
+python -m pytest -q        # 67 tests, mostly on synthetic faces; real-photo tests need scikit-image
+ruff check .
+```
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
 
-This project is intended for learning, experimentation, and research. It is not a replacement for a professionally validated biometric identification system.
+## Limits
 
-## 🤝 Contributing
-
-Contributions, bug reports, and feature suggestions are welcome. Please review `CONTRIBUTING.md` before submitting changes.
-
-## 📄 License
-
-This project is distributed under the MIT License. See the `LICENSE` file for details.
-
-## 👨‍💻 Author
-
-**Aditya Singh Thakur**
-
-GitHub: https://github.com/YOUR-USERNAME
-
----
-
-⭐ If you find VisageLab useful, consider giving the repository a star!
+Haar + LBPH is simple and fast but sensitive to pose and lighting; it is weaker than modern
+embedding models. A DNN backend (YuNet detector + SFace embeddings, both shipped with OpenCV) is the
+planned next step: it needs a backend interface in the pipeline and a model-download command, not
+just a swap of two classes (see the roadmap in [docs/SERIES.md](docs/SERIES.md)).
+Webcam paths and the Streamlit app could not be exercised in the automated build environment.

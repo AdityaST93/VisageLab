@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visagelab"
+version = "1.5.0"
+description = "Consent-based face recognition toolkit (OpenCV only)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["face-recognition", "opencv", "lbph", "computer-vision", "privacy"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = ["opencv-contrib-python>=4.8", "numpy>=1.24"]
+
+[project.optional-dependencies]
+app = ["streamlit>=1.30", "pandas>=2.0"]
+dev = ["pytest", "scikit-image", "ruff"]
+
+[project.scripts]
+visagelab = "visagelab.cli:main"
+
+[tool.setuptools]
+packages = ["visagelab"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+exclude = ["web", "data"]
+
+[tool.ruff.lint]
+# Deliberately small: syntax errors and pyflakes (unused imports/variables, undefined names).
+select = ["E9", "F"]
